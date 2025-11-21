@@ -6,12 +6,14 @@ const LIST_TYPES = ['watched', 'watching', 'planned', 'onhold', 'dropped'];
 const POSTER_PLACEHOLDER = 'https://via.placeholder.com/300x450?text=No+Image';
 
 const CATEGORY_TITLE_MAP = {
-    trending: ['Oppenheimer', 'Barbie', 'Dune: Part Two', 'Killers of the Flower Moon', 'Poor Things', 'The Marvels'],
-    popular: ['The Dark Knight', 'Inception', 'Interstellar', 'Avengers: Endgame', 'Avatar', 'Joker'],
-    top_rated: ['The Godfather', 'The Shawshank Redemption', '12 Angry Men', 'Fight Club', 'Pulp Fiction', 'The Green Mile'],
-    bollywood: ['Jawan', 'Pathaan', 'RRR', 'Kantara', '3 Idiots', 'Gadar 2'],
-    hollywood: ['Mission: Impossible - Dead Reckoning', 'Top Gun: Maverick', 'John Wick: Chapter 4', 'No Time to Die', 'Black Panther', 'Spider-Man: No Way Home']
+    trending: ['Oppenheimer', 'Barbie', 'Dune: Part Two', 'Killers of the Flower Moon', 'Poor Things', 'The Marvels', 'The Batman', 'Everything Everywhere All at Once', 'Top Gun: Maverick', 'Spider-Man: No Way Home', 'Dune', 'No Time to Die', 'The Matrix Resurrections', 'Eternals', 'Shang-Chi'],
+    popular: ['The Dark Knight', 'Inception', 'Interstellar', 'Avengers: Endgame', 'Avatar', 'Joker', 'Parasite', '1917', 'Once Upon a Time in Hollywood', 'Joker', 'Avengers: Infinity War', 'The Lion King', 'Frozen II', 'Toy Story 4', 'Captain Marvel'],
+    top_rated: ['The Godfather', 'The Shawshank Redemption', '12 Angry Men', 'Fight Club', 'Pulp Fiction', 'The Green Mile', 'Schindler\'s List', 'The Lord of the Rings: The Return of the King', 'Forrest Gump', 'Goodfellas', 'The Matrix', 'Se7en', 'The Silence of the Lambs', 'Saving Private Ryan', 'The Prestige'],
+    bollywood: ['Jawan', 'Pathaan', 'RRR', 'Kantara', '3 Idiots', 'Gadar 2', 'Dangal', 'Baahubali 2', 'PK', 'Dhoom 3', 'Bajrangi Bhaijaan', 'Sultan', 'Tiger Zinda Hai', 'War', 'Kabir Singh'],
+    hollywood: ['Mission: Impossible - Dead Reckoning', 'Top Gun: Maverick', 'John Wick: Chapter 4', 'No Time to Die', 'Black Panther', 'Spider-Man: No Way Home', 'Doctor Strange', 'Thor: Love and Thunder', 'Jurassic World Dominion', 'Minions: The Rise of Gru', 'The Batman', 'Uncharted', 'Sonic the Hedgehog 2', 'Morbius', 'The Lost City']
 };
+
+const MOVIES_PER_PAGE = 6; // Number of movies to load per scroll
 
 // Google OAuth Configuration
 // Setup Instructions:
@@ -33,6 +35,10 @@ const CACHE_DURATION = 5 * 60 * 1000; // 5 minutes
 let currentUser = null;
 let currentCategory = 'trending';
 let currentCategoryMovies = []; // Store movies from current category for filtering
+let displayedMoviesCount = 0; // Track how many movies are currently displayed
+let isLoadingMore = false; // Prevent multiple simultaneous loads
+let allCategoryMovies = []; // Store all movies for infinite scroll
+let lastSearchResults = []; // Store latest search results so filters can apply to searches
 
 function createEmptyLists() {
     return {
@@ -72,44 +78,123 @@ function normalizeServerLists(lists = {}) {
 
 function movieMatchesFilters(movie) {
     if (!movie) return false;
-    
-    if (currentFilters.genre) {
-        const normalizedGenre = currentFilters.genre.toLowerCase();
-        const movieGenres = (movie.genres || []).map(g => g.name.toLowerCase());
-        if (!movieGenres.some(g => g.includes(normalizedGenre))) {
-            return false;
-        }
-    }
-    
-    if (currentFilters.year) {
-        // Extract year from year field or release_date
-        let movieYear = movie.year;
-        if (!movieYear && movie.release_date) {
-            // Try to extract year from release_date (format: "DD MMM YYYY" or "YYYY-MM-DD")
-            const dateMatch = movie.release_date.match(/\d{4}/);
-            if (dateMatch) {
-                movieYear = dateMatch[0];
+
+    // Normalize movie fields into a predictable shape for matching
+    function normalizeMovieForFiltering(m) {
+        const LANG_MAP = {
+            english: 'en', hindi: 'hi', tamil: 'ta', telugu: 'te', malayalam: 'ml', kannada: 'kn',
+            spanish: 'es', french: 'fr', japanese: 'ja', korean: 'ko', german: 'de', italian: 'it',
+            portuguese: 'pt', russian: 'ru', chinese: 'zh'
+        };
+
+        const out = {
+            genres: [], // array of normalized genre strings
+            year: null,  // 'YYYY'
+            languages: new Set(), // mix of names & iso codes
+            rating: null
+        };
+
+        // Genres
+        const rawGenres = m.genres || m.genre || m.Genre || [];
+        const pushGenre = (g) => {
+            if (!g) return;
+            if (typeof g === 'string') {
+                g.split(',').forEach(p => {
+                    const s = String(p).toLowerCase().trim().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ');
+                    if (s) out.genres.push(s);
+                });
+            } else if (typeof g === 'object') {
+                const name = (g.name || g.label || '').toString().toLowerCase().trim();
+                name.split(',').forEach(p => {
+                    const s = String(p).toLowerCase().trim().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ');
+                    if (s) out.genres.push(s);
+                });
             }
+        };
+        if (Array.isArray(rawGenres)) rawGenres.forEach(pushGenre);
+        else pushGenre(rawGenres);
+
+        // Year extraction
+        const yearCandidates = [m.year, m.release_date, m.releaseDate, m.Year, m.raw && m.raw.Year];
+        for (const c of yearCandidates) {
+            if (!c) continue;
+            const s = String(c);
+            const match = s.match(/(\d{4})/);
+            if (match) { out.year = match[1]; break; }
         }
-        if ((movieYear || '').toString() !== currentFilters.year) {
+
+        // Languages
+        if (m.language) m.language.toString().split(',').forEach(l => out.languages.add(l.toLowerCase().trim()));
+        if (m.raw && m.raw.Language) m.raw.Language.toString().split(',').forEach(l => out.languages.add(l.toLowerCase().trim()));
+        if (m.spoken_languages && Array.isArray(m.spoken_languages)) {
+            m.spoken_languages.forEach(sl => {
+                if (!sl) return;
+                if (typeof sl === 'string') sl.split(',').forEach(l => out.languages.add(l.toLowerCase().trim()));
+                else {
+                    if (sl.name) out.languages.add(sl.name.toLowerCase().trim());
+                    if (sl.iso_639_1) out.languages.add(sl.iso_639_1.toLowerCase().trim());
+                }
+            });
+        }
+        if (m.original_language) out.languages.add(m.original_language.toLowerCase().trim());
+
+        // Augment with ISO codes and names from map
+        Array.from(out.languages).forEach(l => {
+            const key = l.toLowerCase();
+            if (LANG_MAP[key]) out.languages.add(LANG_MAP[key]);
+            const nameFromCode = Object.keys(LANG_MAP).find(k => LANG_MAP[k] === key);
+            if (nameFromCode) out.languages.add(nameFromCode);
+        });
+
+        // Rating
+        const mr = m.vote_average || m.rating || m.imdbRating;
+        out.rating = mr === null || mr === undefined ? null : Number(mr);
+
+        return out;
+    }
+
+    const norm = normalizeMovieForFiltering(movie);
+
+    // Genre filter
+    if (currentFilters.genre) {
+        const filter = currentFilters.genre.toLowerCase().trim().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ');
+        if (!filter) return false;
+        if (!norm.genres || norm.genres.length === 0) return false;
+        const matched = norm.genres.some(g => g === filter || g.includes(filter) || filter.includes(g));
+        if (!matched) return false;
+    }
+
+    // Year filter
+    if (currentFilters.year) {
+        const filterYear = currentFilters.year.toString().trim();
+        if (!norm.year) return false;
+        if (filterYear.endsWith('s')) {
+            const prefix = filterYear.replace(/s$/i, '');
+            if (!norm.year.startsWith(prefix)) return false;
+        } else if (norm.year !== filterYear) {
             return false;
         }
     }
-    
+
+    // Language filter
     if (currentFilters.language) {
-        const movieLanguages = (movie.language || '').toLowerCase();
-        if (!movieLanguages.includes(currentFilters.language.toLowerCase())) {
-            return false;
-        }
+        const filterLanguage = currentFilters.language.toLowerCase().trim();
+        if (!filterLanguage) return false;
+        if (!norm.languages || norm.languages.size === 0) return false;
+        const found = Array.from(norm.languages).some(l => {
+            const ll = l.toLowerCase();
+            return ll === filterLanguage || ll.includes(filterLanguage) || filterLanguage.includes(ll);
+        });
+        if (!found) return false;
     }
-    
+
+    // Rating filter
     if (currentFilters.rating) {
         const ratingValue = Number(currentFilters.rating);
-        if (!movie.vote_average || movie.vote_average < ratingValue) {
-            return false;
-        }
+        if (Number.isNaN(ratingValue)) return false;
+        if (norm.rating === null || norm.rating === undefined || Number.isNaN(norm.rating) || norm.rating < ratingValue) return false;
     }
-    
+
     return true;
 }
 
@@ -227,18 +312,30 @@ async function fetchMovieByTitle(title, extraParams = {}) {
     return normalized;
 }
 
-async function fetchMoviesByTitles(titles = []) {
+// Fetch multiple movies by title in batches to reduce total load time
+async function fetchMoviesByTitles(titles = [], batchSize = 4) {
     const movies = [];
-    
-    for (const title of titles) {
-        try {
-            const movie = await fetchMovieByTitle(title);
-            movies.push(movie);
-        } catch (error) {
-            console.warn(`OMDb lookup failed for "${title}":`, error.message);
-        }
+    if (!Array.isArray(titles) || titles.length === 0) return movies;
+
+    // Process titles in batches to avoid firing too many concurrent requests
+    for (let i = 0; i < titles.length; i += batchSize) {
+        const batch = titles.slice(i, i + batchSize);
+
+        // Map each title to a fetch promise and catch errors per-title
+        const promises = batch.map(title =>
+            fetchMovieByTitle(title).catch(error => {
+                console.warn(`OMDb lookup failed for "${title}":`, error && error.message ? error.message : error);
+                return null;
+            })
+        );
+
+        // Wait for the batch to complete
+        const results = await Promise.all(promises);
+
+        // Add successful results
+        results.forEach(m => { if (m) movies.push(m); });
     }
-    
+
     return movies;
 }
 
@@ -452,6 +549,7 @@ const resetFilters = document.getElementById('resetFilters');
 const homePage = document.getElementById('homePage');
 const myListPage = document.getElementById('myListPage');
 const myListGrid = document.getElementById('myListGrid');
+const dashboardPage = document.getElementById('dashboardPage');
 const loginErrorText = document.getElementById('loginError');
 const registerErrorText = document.getElementById('registerError');
 
@@ -570,11 +668,12 @@ function setupEventListeners() {
     // Apply Filters
     applyFilters.addEventListener('click', () => {
         currentFilters = {
-            genre: document.getElementById('genreFilter').value,
-            year: document.getElementById('yearFilter').value,
-            language: document.getElementById('languageFilter').value,
-            rating: document.getElementById('ratingFilter').value
+            genre: document.getElementById('genreFilter').value.trim(),
+            year: document.getElementById('yearFilter').value.trim(),
+            language: document.getElementById('languageFilter').value.trim(),
+            rating: document.getElementById('ratingFilter').value.trim()
         };
+        // Filters work on category movies regardless of search input
         loadMoviesWithFilters();
     });
 
@@ -585,6 +684,7 @@ function setupEventListeners() {
         document.getElementById('languageFilter').value = '';
         document.getElementById('ratingFilter').value = '';
         currentFilters = { genre: '', year: '', language: '', rating: '' };
+        // Reload category movies without filters (don't clear search input)
         loadMoviesByCategory(currentCategory);
     });
 
@@ -613,6 +713,9 @@ function setupEventListeners() {
             } else if (page === 'mylist') {
                 myListPage.classList.add('active');
                 renderMyList();
+            } else if (page === 'dashboard') {
+                dashboardPage.classList.add('active');
+                loadDashboard();
             }
         });
     });
@@ -717,19 +820,42 @@ function showMainContent() {
     updateListCounts();
 }
 
+// Show Skeleton Loaders
+function showSkeletonLoaders(count = 6) {
+    const skeletons = Array(count).fill(0).map(() => `
+        <div class="movie-card skeleton-card">
+            <div class="skeleton-poster"></div>
+            <div class="skeleton-content">
+                <div class="skeleton-line skeleton-title"></div>
+                <div class="skeleton-line skeleton-meta"></div>
+                <div class="skeleton-line skeleton-text"></div>
+                <div class="skeleton-line skeleton-text short"></div>
+            </div>
+        </div>
+    `).join('');
+    moviesGrid.innerHTML = skeletons;
+}
+
 // Load Movies by Category
 async function loadMoviesByCategory(category) {
-    showLoading();
+    showSkeletonLoaders(6);
     console.log('📺 Loading category:', category);
+    displayedMoviesCount = 0;
+    allCategoryMovies = [];
     
     try {
         const curatedTitles = CATEGORY_TITLE_MAP[category] || CATEGORY_TITLE_MAP.trending;
         const movies = await fetchMoviesByTitles(curatedTitles);
+        // Clear previous search results when switching categories
+        lastSearchResults = [];
         currentCategoryMovies = movies; // Store for filtering
-        displayMovies(movies);
+        allCategoryMovies = movies; // Store all for infinite scroll
+        displayMovies(movies.slice(0, MOVIES_PER_PAGE), true); // Initial load
+        setupInfiniteScroll();
     } catch (error) {
         console.error('❌ Error loading movies:', error);
         currentCategoryMovies = []; // Clear on error
+        allCategoryMovies = [];
         moviesGrid.innerHTML = `
             <div style="grid-column:1/-1;text-align:center;padding:3rem;color:#ff6b6b;">
                 <h2 style="margin-bottom:1rem;">❌ Error Loading Movies</h2>
@@ -741,49 +867,44 @@ async function loadMoviesByCategory(category) {
             </div>
         `;
     }
-    hideLoading();
 }
 
 // Load Movies with Filters
 async function loadMoviesWithFilters() {
-    showLoading();
+    showSkeletonLoaders(6);
     try {
-        const query = searchInput.value.trim();
+        // Check if any filters are actually set
+        const hasFilters = currentFilters.genre || currentFilters.year || currentFilters.language || currentFilters.rating;
         
-        if (query) {
-            // If there's a search query, search for that specific movie
-            const extraParams = {};
-            if (currentFilters.year) extraParams.year = currentFilters.year;
-            
-            const movie = await fetchMovieByTitle(query, extraParams);
-            if (movieMatchesFilters(movie)) {
-                displayMovies([movie]);
-            } else {
-                moviesGrid.innerHTML = `
-                    <p style="text-align:center;color:#aaa;grid-column:1/-1;padding:3rem;">
-                        "${query}" does not match the selected filters.
-                    </p>
-                `;
-            }
+        if (!hasFilters) {
+            // No filters set, just reload the current category
+            await loadMoviesByCategory(currentCategory);
+            hideLoading();
+            return;
+        }
+        
+        // Filters are set - filter the current category movies by default.
+        // This keeps filter behavior consistent regardless of a recent search.
+        if (!currentCategoryMovies || currentCategoryMovies.length === 0) {
+            await loadMoviesByCategory(currentCategory);
+        }
+        const sourceMovies = currentCategoryMovies || [];
+
+        // Filter the chosen source
+        const filteredMovies = (sourceMovies || []).filter(movie => movieMatchesFilters(movie));
+        allCategoryMovies = filteredMovies; // Update for infinite scroll
+
+        if (filteredMovies.length === 0) {
+            moviesGrid.innerHTML = `
+                <p style="text-align:center;color:#aaa;grid-column:1/-1;padding:3rem;">
+                    No movies found matching the selected filters. Try adjusting your filter criteria.
+                </p>
+            `;
+            displayedMoviesCount = 0;
+            removeLoadingIndicator();
         } else {
-            // If no search query, filter the current category's movies
-            if (currentCategoryMovies.length === 0) {
-                // Load category first if not loaded
-                await loadMoviesByCategory(currentCategory);
-            }
-            
-            // Filter the current category movies
-            const filteredMovies = currentCategoryMovies.filter(movie => movieMatchesFilters(movie));
-            
-            if (filteredMovies.length === 0) {
-                moviesGrid.innerHTML = `
-                    <p style="text-align:center;color:#aaa;grid-column:1/-1;padding:3rem;">
-                        No movies found matching the selected filters. Try adjusting your filter criteria.
-                    </p>
-                `;
-            } else {
-                displayMovies(filteredMovies);
-            }
+            displayMovies(filteredMovies.slice(0, MOVIES_PER_PAGE), true); // Initial load
+            setupInfiniteScroll();
         }
         
         advancedFilters.classList.remove('active');
@@ -813,17 +934,18 @@ async function loadMoviesWithFilters() {
             </div>
         `;
     }
-    hideLoading();
 }
 
 // Search Movies
 async function searchMovies(query) {
-    showLoading();
+    showSkeletonLoaders(1);
     console.log('🔍 Searching for:', query);
     
     try {
         const movie = await fetchMovieByTitle(query);
-        displayMovies([movie]);
+        // Store last search result so filters can apply to it
+        lastSearchResults = movie ? [movie] : [];
+        displayMovies(lastSearchResults, true);
     } catch (error) {
         console.error('❌ Error searching movies:', error);
         const message = getFriendlyMovieError(error);
@@ -850,20 +972,72 @@ async function searchMovies(query) {
             </div>
         `;
     }
-    hideLoading();
+}
+
+// Setup Infinite Scroll
+function setupInfiniteScroll() {
+    // Remove existing scroll listener
+    window.removeEventListener('scroll', handleScroll);
+    // Add new scroll listener with throttling
+    let scrollTimeout;
+    window.addEventListener('scroll', () => {
+        clearTimeout(scrollTimeout);
+        scrollTimeout = setTimeout(handleScroll, 100);
+    }, { passive: true });
+}
+
+// Handle Scroll for Infinite Loading
+function handleScroll() {
+    if (isLoadingMore) return;
+    
+    const scrollTop = window.pageYOffset || document.documentElement.scrollTop;
+    const windowHeight = window.innerHeight;
+    const documentHeight = document.documentElement.scrollHeight;
+    
+    // Load more when user is 200px from bottom
+    if (scrollTop + windowHeight >= documentHeight - 200) {
+        loadMoreMovies();
+    }
+}
+
+// Load More Movies (Infinite Scroll)
+async function loadMoreMovies() {
+    if (isLoadingMore || displayedMoviesCount >= allCategoryMovies.length) {
+        return;
+    }
+    
+    isLoadingMore = true;
+    const nextBatch = allCategoryMovies.slice(displayedMoviesCount, displayedMoviesCount + MOVIES_PER_PAGE);
+    
+    if (nextBatch.length > 0) {
+        displayMovies(nextBatch, false); // Append mode
+    }
+    
+    isLoadingMore = false;
 }
 
 // Display Movies with Optimized Rendering
-function displayMovies(movies) {
+function displayMovies(movies, clear = true) {
     if (!movies || movies.length === 0) {
-        moviesGrid.innerHTML = `
-            <p style="text-align:center;color:#ff6b6b;grid-column:1/-1;padding:3rem;">
-                Movie not found. Please try again.
-            </p>
-        `;
+        if (clear) {
+            moviesGrid.innerHTML = `
+                <p style="text-align:center;color:#ff6b6b;grid-column:1/-1;padding:3rem;">
+                    Movie not found. Please try again.
+                </p>
+            `;
+        }
         return;
     }
 
+    if (clear) {
+        moviesGrid.innerHTML = '';
+        displayedMoviesCount = 0;
+    }
+
+    // Use DocumentFragment for better performance
+    const fragment = document.createDocumentFragment();
+    const tempDiv = document.createElement('div');
+    
     const cardsHtml = movies.map(movie => {
         const posterPath = movie.poster_path && movie.poster_path.startsWith('http')
             ? movie.poster_path
@@ -893,7 +1067,10 @@ function displayMovies(movies) {
                     <button onclick="event.stopPropagation(); addToList('${movie.id}', 'dropped')">Dropped</button>
                 </div>
                 <div class="movie-card-body" onclick="showMovieDetails('${movie.id}')">
-                    <img src="${posterPath}" alt="${movie.title}" class="movie-poster" loading="lazy">
+                    <div class="poster-wrapper">
+                        <img src="${posterPath}" alt="${movie.title}" class="movie-poster" loading="lazy" data-src="${posterPath}" onerror="this.src='${POSTER_PLACEHOLDER}'">
+                        <div class="poster-skeleton"></div>
+                    </div>
                     <div class="movie-info">
                         <div class="movie-title">${movie.title}</div>
                         <div class="movie-meta">
@@ -910,12 +1087,31 @@ function displayMovies(movies) {
         `;
     }).join('');
     
-    moviesGrid.innerHTML = cardsHtml;
+    tempDiv.innerHTML = cardsHtml;
+    while (tempDiv.firstChild) {
+        fragment.appendChild(tempDiv.firstChild);
+    }
     
+    moviesGrid.appendChild(fragment);
+    displayedMoviesCount += movies.length;
+    
+    // Lazy load images after a short delay to allow DOM to settle
+    setTimeout(() => {
+        lazyLoadImages();
+    }, 100);
+    
+    // Cache movies
     movies.forEach(movie => {
         const cacheKey = `movie_${movie.id}`;
         apiCache.set(cacheKey, { data: movie, timestamp: Date.now() });
     });
+    
+    // Add loading indicator if more movies available
+    if (displayedMoviesCount < allCategoryMovies.length) {
+        addLoadingIndicator();
+    } else {
+        removeLoadingIndicator();
+    }
 }
 
 // Toggle List Dropdown
@@ -1015,7 +1211,7 @@ async function showMovieDetails(movieId) {
             const title = card?.dataset.movieTitle;
             movie = await fetchMovieByTitle(title || '');
         }
-        renderMovieDetails(movie);
+        await renderMovieDetails(movie);
     } catch (error) {
         console.error('Error fetching movie details:', error);
         document.getElementById('modalBody').innerHTML = '<p style="text-align:center;padding:2rem;">Error loading movie details.</p>';
@@ -1023,8 +1219,51 @@ async function showMovieDetails(movieId) {
     hideLoading();
 }
 
+// Fetch YouTube Trailer
+async function fetchTrailer(title, year) {
+    try {
+        const response = await fetch(`/api/trailer?title=${encodeURIComponent(title)}&year=${year || ''}`);
+        if (!response.ok) return null;
+        const data = await response.json();
+        return data;
+    } catch (error) {
+        console.error('Error fetching trailer:', error);
+        return null;
+    }
+}
+
+// Fetch Watch Options
+async function fetchWatchOptions(title, year, imdbId) {
+    try {
+        const params = new URLSearchParams();
+        if (title) params.append('title', title);
+        if (year) params.append('year', year);
+        if (imdbId) params.append('imdbId', imdbId);
+        
+        const response = await fetch(`/api/watch?${params.toString()}`);
+        if (!response.ok) return null;
+        const data = await response.json();
+        return data;
+    } catch (error) {
+        console.error('Error fetching watch options:', error);
+        return null;
+    }
+}
+
+// Search YouTube for trailer video ID (client-side)
+async function searchYouTubeTrailer(title, year) {
+    // This is a simplified approach - in production, use YouTube Data API v3
+    const searchQuery = `${title} ${year || ''} official trailer`.trim();
+    // We'll use YouTube's embed API with a search-based approach
+    // For now, return a search URL that can be embedded
+    return {
+        searchQuery,
+        embedUrl: null // Will be populated if we find a video ID
+    };
+}
+
 // Render Movie Details
-function renderMovieDetails(movie) {
+async function renderMovieDetails(movie) {
     const posterPath = movie.poster_path && movie.poster_path.startsWith('http')
         ? movie.poster_path
         : movie.poster_path
@@ -1038,6 +1277,79 @@ function renderMovieDetails(movie) {
     const actors = movie.actors && movie.actors.length > 0 ? movie.actors.join(', ') : 'Cast information unavailable.';
     const isInList = isMovieInAnyList(movie.id);
     const currentListType = getCurrentListType(movie.id);
+    
+    // Fetch trailer and watch options
+    const trailerData = await fetchTrailer(movie.title, movie.year);
+    const watchData = await fetchWatchOptions(movie.title, movie.year, movie.id);
+    
+    // Build trailer section
+    const searchQuery = trailerData?.searchQuery || `${movie.title} ${movie.year || ''} official trailer`;
+    const youtubeSearchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(searchQuery)}`;
+    const trailerSection = `
+        <div class="trailer-section">
+            <h3 class="section-title-modal">🎬 Watch Trailer</h3>
+            <div class="trailer-container-wrapper">
+                <div class="trailer-search-info">
+                    <p>Search for "${movie.title}" trailer on YouTube:</p>
+                    <a href="${youtubeSearchUrl}" target="_blank" rel="noopener" class="youtube-search-btn">
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="#FF0000">
+                            <path d="M23.498 6.186a3.016 3.016 0 0 0-2.122-2.136C19.505 3.545 12 3.545 12 3.545s-7.505 0-9.377.505A3.017 3.017 0 0 0 .502 6.186C0 8.07 0 12 0 12s0 3.93.502 5.814a3.016 3.016 0 0 0 2.122 2.136c1.871.505 9.376.505 9.376.505s7.505 0 9.377-.505a3.015 3.015 0 0 0 2.122-2.136C24 15.93 24 12 24 12s0-3.93-.502-5.814zM9.545 15.568V8.432L15.818 12l-6.273 3.568z"/>
+                        </svg>
+                        Search on YouTube
+                    </a>
+                </div>
+                <div class="trailer-embed-placeholder">
+                    <p>💡 Tip: Click the button above to find and watch the official trailer on YouTube</p>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    // Build watch options section
+    let watchSection = '';
+    if (watchData && watchData.watchOptions) {
+        const watchOptions = watchData.watchOptions;
+        watchSection = `
+            <div class="watch-section">
+                <h3 class="section-title-modal">📺 Where to Watch</h3>
+                <div class="watch-options-grid">
+                    <a href="${watchOptions.netflix}" target="_blank" rel="noopener" class="watch-option-card" data-service="netflix">
+                        <div class="watch-icon">🎬</div>
+                        <div class="watch-label">Netflix</div>
+                    </a>
+                    <a href="${watchOptions.prime}" target="_blank" rel="noopener" class="watch-option-card" data-service="prime">
+                        <div class="watch-icon">📦</div>
+                        <div class="watch-label">Prime Video</div>
+                    </a>
+                    <a href="${watchOptions.hulu}" target="_blank" rel="noopener" class="watch-option-card" data-service="hulu">
+                        <div class="watch-icon">📺</div>
+                        <div class="watch-label">Hulu</div>
+                    </a>
+                    <a href="${watchOptions.disney}" target="_blank" rel="noopener" class="watch-option-card" data-service="disney">
+                        <div class="watch-icon">🏰</div>
+                        <div class="watch-label">Disney+</div>
+                    </a>
+                    <a href="${watchOptions.hbo}" target="_blank" rel="noopener" class="watch-option-card" data-service="hbo">
+                        <div class="watch-icon">🎭</div>
+                        <div class="watch-label">HBO Max</div>
+                    </a>
+                    <a href="${watchOptions.apple}" target="_blank" rel="noopener" class="watch-option-card" data-service="apple">
+                        <div class="watch-icon">🍎</div>
+                        <div class="watch-label">Apple TV+</div>
+                    </a>
+                    <a href="${watchOptions.youtube}" target="_blank" rel="noopener" class="watch-option-card" data-service="youtube">
+                        <div class="watch-icon">▶️</div>
+                        <div class="watch-label">YouTube</div>
+                    </a>
+                    <a href="${watchOptions.google}" target="_blank" rel="noopener" class="watch-option-card" data-service="google">
+                        <div class="watch-icon">🔍</div>
+                        <div class="watch-label">Search Online</div>
+                    </a>
+                </div>
+                <p class="watch-note">💡 Click on any service to search for this movie</p>
+            </div>
+        `;
+    }
     
     document.getElementById('modalBody').innerHTML = `
         <div class="movie-details">
@@ -1078,6 +1390,8 @@ function renderMovieDetails(movie) {
                     </div>
                 </div>
             </div>
+            ${trailerSection}
+            ${watchSection}
         </div>
     `;
 }
@@ -1222,7 +1536,7 @@ function renderMyList(filter = 'all') {
             <div class="mylist-movie-card" onclick="showMovieDetails('${movie.id || movie.imdbId}')">
                 <span class="list-status-badge">${statusLabels[movie.listType]}</span>
                 <button class="remove-from-list-btn" onclick="event.stopPropagation(); removeFromList('${movie.id || movie.imdbId}')">×</button>
-                <img src="${posterPath}" alt="${movie.title}" class="movie-poster" loading="lazy">
+                <img src="${posterPath || POSTER_PLACEHOLDER}" alt="${movie.title}" class="movie-poster" loading="lazy" onload="this.classList.add('loaded')" onerror="this.src='${POSTER_PLACEHOLDER}'; this.classList.add('loaded');">
                 <div class="movie-info">
                     <div class="movie-title">${movie.title}</div>
                     <div class="movie-meta">
@@ -1233,7 +1547,99 @@ function renderMyList(filter = 'all') {
             </div>
         `;
     }).join('');
+
+    // Ensure posters in My List get the loaded class if already cached/loaded
+    setTimeout(() => lazyLoadImages(), 50);
 }
+
+// Dashboard Functions
+async function loadDashboard() {
+    const dashboardLoading = document.getElementById('dashboardLoading');
+    const dashboardContent = document.getElementById('dashboardContent');
+    const dashboardError = document.getElementById('dashboardError');
+    
+    dashboardLoading.style.display = 'block';
+    dashboardContent.style.display = 'none';
+    dashboardError.style.display = 'none';
+    
+    try {
+        const response = await fetch('/api/stats', { credentials: 'include' });
+        if (!response.ok) {
+            throw new Error('Failed to load statistics');
+        }
+        
+        const stats = await response.json();
+        renderDashboard(stats);
+        
+        dashboardLoading.style.display = 'none';
+        dashboardContent.style.display = 'block';
+    } catch (error) {
+        console.error('Error loading dashboard:', error);
+        dashboardLoading.style.display = 'none';
+        dashboardError.style.display = 'block';
+    }
+}
+
+function renderDashboard(stats) {
+    const { overview, distributions, topStats } = stats;
+    
+    // Update overview cards
+    document.getElementById('statTotalMovies').textContent = overview.totalMovies;
+    document.getElementById('statWatched').textContent = overview.watchedCount;
+    document.getElementById('statWatchTime').textContent = Math.round(overview.totalWatchTime / 60);
+    
+    // Update breakdown
+    document.getElementById('breakdownWatching').textContent = overview.watchingCount;
+    document.getElementById('breakdownPlanned').textContent = overview.plannedCount;
+    document.getElementById('breakdownOnhold').textContent = overview.onholdCount;
+    document.getElementById('breakdownDropped').textContent = overview.droppedCount;
+    
+    // Render charts
+    renderListChart(distributions.listDistribution);
+    // Year/Decade charts removed per request
+    
+    // Top Years removed per request
+}
+
+function renderListChart(data) {
+    const container = document.getElementById('listChart');
+    const labels = {
+        watched: 'Watched',
+        watching: 'Watching',
+        planned: 'Planned',
+        onhold: 'On Hold',
+        dropped: 'Dropped'
+    };
+    
+    const maxValue = Math.max(...Object.values(data));
+    const colors = ['#667eea', '#764ba2', '#f093fb', '#4facfe', '#43e97b'];
+    let colorIndex = 0;
+    
+    container.innerHTML = '<div class="bar-chart"></div>';
+    const chart = container.querySelector('.bar-chart');
+    
+    Object.entries(data).forEach(([key, value]) => {
+        const percentage = maxValue > 0 ? (value / maxValue) * 100 : 0;
+        const color = colors[colorIndex % colors.length];
+        colorIndex++;
+        
+        const item = document.createElement('div');
+        item.className = 'bar-item';
+        item.innerHTML = `
+            <span class="bar-label">${labels[key]}</span>
+            <div class="bar-wrapper">
+                <div class="bar-fill" style="width: ${percentage}%; background: ${color};">
+                    ${value}
+                </div>
+            </div>
+        `;
+        chart.appendChild(item);
+    });
+}
+
+// Rating chart removed
+
+// Year/Decade/Top Years charts removed per request
 
 // Make functions globally accessible
 window.showMovieDetails = showMovieDetails;
@@ -1242,6 +1648,74 @@ window.addToList = addToList;
 window.removeFromList = removeFromList;
 window.toggleModalListDropdown = toggleModalListDropdown;
 window.addToListFromModal = addToListFromModal;
+
+// Add missing UI helpers: loading indicator and image lazy loader
+function addLoadingIndicator() {
+    // Avoid duplicate indicator
+    if (document.getElementById('loadingIndicator')) return;
+
+    const indicator = document.createElement('div');
+    indicator.id = 'loadingIndicator';
+    indicator.className = 'loading-indicator';
+    indicator.innerHTML = `
+        <div class="loading-spinner" aria-hidden="true"></div>
+        <div class="loading-text">Loading more movies...</div>
+    `;
+
+    // Basic inline styles if the page CSS doesn't provide them
+    indicator.style.gridColumn = '1 / -1';
+    indicator.style.display = 'flex';
+    indicator.style.justifyContent = 'center';
+    indicator.style.alignItems = 'center';
+    indicator.style.padding = '1rem';
+    indicator.style.color = '#888';
+
+    moviesGrid.appendChild(indicator);
+}
+
+function removeLoadingIndicator() {
+    const el = document.getElementById('loadingIndicator');
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+}
+
+function lazyLoadImages() {
+    const images = Array.from(document.querySelectorAll('img[data-src]'));
+    if (images.length === 0) return;
+
+    // Helper to set src and cleanup
+    const loadImage = (img) => {
+        const src = img.getAttribute('data-src');
+        if (!src) return;
+        img.src = src;
+        img.removeAttribute('data-src');
+        img.addEventListener('load', () => {
+            const skeleton = img.closest('.poster-wrapper')?.querySelector('.poster-skeleton');
+            if (skeleton) skeleton.style.display = 'none';
+            img.classList.add('loaded');
+        });
+        img.addEventListener('error', () => {
+            img.src = POSTER_PLACEHOLDER;
+            const skeleton = img.closest('.poster-wrapper')?.querySelector('.poster-skeleton');
+            if (skeleton) skeleton.style.display = 'none';
+        });
+    };
+
+    if ('IntersectionObserver' in window) {
+        const obs = new IntersectionObserver((entries, observer) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    loadImage(entry.target);
+                    observer.unobserve(entry.target);
+                }
+            });
+        }, { rootMargin: '200px 0px', threshold: 0.01 });
+
+        images.forEach(img => obs.observe(img));
+    } else {
+        // Fallback: load all immediately
+        images.forEach(img => loadImage(img));
+    }
+}
 
 
 

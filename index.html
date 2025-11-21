@@ -65,6 +65,7 @@
             <nav class="nav-links">
                 <a href="#" class="nav-link active" data-page="home">Home</a>
                 <a href="#" class="nav-link" data-page="mylist">My List</a>
+                <a href="#" class="nav-link" data-page="dashboard">Dashboard</a>
             </nav>
             <div class="user-info">
                 <div class="user-avatar" id="userAvatar"></div>
@@ -202,7 +203,9 @@
                 <p style="margin-top: 1rem;">Loading amazing content...</p>
             </div>
 
-            <div class="movies-grid" id="moviesGrid"></div>
+            <div class="movies-grid" id="moviesGrid">
+                <!-- Skeleton loaders will be added here -->
+            </div>
         </div>
 
         <!-- My List Page -->
@@ -233,6 +236,83 @@
 
                 <div class="mylist-grid" id="myListGrid">
                     <p class="empty-message">No movies in your list yet. Start adding movies from the home page!</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Dashboard Page -->
+        <div class="page" id="dashboardPage">
+            <div class="dashboard-container">
+                <h1 class="page-title">📊 Your Statistics Dashboard</h1>
+                
+                <div class="loading" id="dashboardLoading">
+                    <div class="spinner"></div>
+                    <p style="margin-top: 1rem;">Loading your statistics...</p>
+                </div>
+
+                <div class="dashboard-content" id="dashboardContent" style="display: none;">
+                    <!-- Overview Cards -->
+                    <div class="stats-overview">
+                        <div class="stat-card">
+                            <div class="stat-icon">🎬</div>
+                            <div class="stat-value" id="statTotalMovies">0</div>
+                            <div class="stat-label">Total Movies</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon">✅</div>
+                            <div class="stat-value" id="statWatched">0</div>
+                            <div class="stat-label">Watched</div>
+                        </div>
+                        <div class="stat-card">
+                            <div class="stat-icon">⏱️</div>
+                            <div class="stat-value" id="statWatchTime">0</div>
+                            <div class="stat-label">Hours Watched</div>
+                        </div>
+                        <!-- Removed: This Month / This Year cards per request -->
+                    </div>
+
+                    <!-- Charts Section -->
+                    <div class="charts-grid">
+                        <!-- List Distribution Chart -->
+                        <div class="chart-card">
+                            <h3 class="chart-title">Movies by List</h3>
+                            <div class="chart-container" id="listChart"></div>
+                        </div>
+
+                        <!-- Rating Distribution Chart removed per request -->
+
+                        <!-- Year/Decade charts removed per request -->
+                    </div>
+
+                    <!-- Additional Stats -->
+                    <div class="additional-stats">
+                        <!-- Activity Overview and Top Years removed per request -->
+                        <div class="stats-section">
+                            <h3 class="section-title">📊 List Breakdown</h3>
+                            <div class="list-breakdown">
+                                <div class="breakdown-item">
+                                    <span class="breakdown-label">Watching:</span>
+                                    <span class="breakdown-value" id="breakdownWatching">0</span>
+                                </div>
+                                <div class="breakdown-item">
+                                    <span class="breakdown-label">Planned:</span>
+                                    <span class="breakdown-value" id="breakdownPlanned">0</span>
+                                </div>
+                                <div class="breakdown-item">
+                                    <span class="breakdown-label">On Hold:</span>
+                                    <span class="breakdown-value" id="breakdownOnhold">0</span>
+                                </div>
+                                <div class="breakdown-item">
+                                    <span class="breakdown-label">Dropped:</span>
+                                    <span class="breakdown-value" id="breakdownDropped">0</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="dashboard-error" id="dashboardError" style="display: none;">
+                    <p>Failed to load statistics. Please try again later.</p>
                 </div>
             </div>
         </div>

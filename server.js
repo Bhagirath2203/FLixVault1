@@ -10,6 +10,7 @@ const OMDB_BASE_URL = 'https://www.omdbapi.com/';
 const OMDB_KEY = process.env.OMDB_KEY;
 const authRouter = require('./authRoute');
 const listRouter = require('./listRoute');
+const statsRouter = require('./statsRoute');
 const connectDB = require('./db');
 // Enable CORS for all routes (with credentials for auth cookies)
 app.use(cors({
@@ -30,6 +31,7 @@ app.get('/', (req, res) => {
 });
 app.use('/api/auth', authRouter);
 app.use('/api/lists', listRouter);
+app.use('/api/stats', statsRouter);
 // Health check endpoint
 app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', message: 'FlixVault server is running!' });
@@ -89,6 +91,67 @@ app.get('/api/tmdb', async (req, res) => {
 // OMDb proxy endpoint (supports POST body from frontend)
 app.post('/api/tmdb', async (req, res) => {
     proxyOmdbRequest(req.body || {}, res);
+});
+
+// YouTube Trailer Search Endpoint
+app.get('/api/trailer', async (req, res) => {
+    try {
+        const { title, year } = req.query;
+        if (!title) {
+            return res.status(400).json({ error: 'Movie title is required' });
+        }
+
+        // Search YouTube for movie trailer
+        const searchQuery = `${title} ${year || ''} official trailer`.trim();
+        const youtubeSearchUrl = `https://www.youtube.com/results?search_query=${encodeURIComponent(searchQuery)}`;
+        
+        // For now, we'll return a search URL that can be used
+        // In production, you'd use YouTube Data API v3 with an API key
+        // For client-side, we'll use YouTube's embed API
+        res.json({
+            searchQuery,
+            searchUrl: youtubeSearchUrl,
+            // YouTube embed URL pattern: https://www.youtube.com/embed/VIDEO_ID
+            // We'll let the frontend handle the actual search
+        });
+    } catch (error) {
+        console.error('Trailer search error:', error);
+        res.status(500).json({ error: 'Failed to search for trailer' });
+    }
+});
+
+// Where to Watch Endpoint (using JustWatch API or similar)
+app.get('/api/watch', async (req, res) => {
+    try {
+        const { title, year, imdbId } = req.query;
+        if (!title && !imdbId) {
+            return res.status(400).json({ error: 'Movie title or IMDb ID is required' });
+        }
+
+        // For now, we'll return links to common streaming services
+        // In production, you'd integrate with JustWatch API or similar service
+        const searchQuery = title || '';
+        const watchOptions = {
+            netflix: `https://www.netflix.com/search?q=${encodeURIComponent(searchQuery)}`,
+            prime: `https://www.amazon.com/s?k=${encodeURIComponent(searchQuery)}&i=prime-instant-video`,
+            hulu: `https://www.hulu.com/search?q=${encodeURIComponent(searchQuery)}`,
+            disney: `https://www.disneyplus.com/search?q=${encodeURIComponent(searchQuery)}`,
+            hbo: `https://www.hbomax.com/search?q=${encodeURIComponent(searchQuery)}`,
+            apple: `https://tv.apple.com/search?term=${encodeURIComponent(searchQuery)}`,
+            youtube: `https://www.youtube.com/results?search_query=${encodeURIComponent(searchQuery + ' movie')}`,
+            google: `https://www.google.com/search?q=${encodeURIComponent(searchQuery + ' watch online')}`
+        };
+
+        res.json({
+            title: searchQuery,
+            watchOptions,
+            // Note: For production, integrate with JustWatch API for accurate availability
+            message: 'Click on any service to search for this movie'
+        });
+    } catch (error) {
+        console.error('Watch options error:', error);
+        res.status(500).json({ error: 'Failed to get watch options' });
+    }
 });
 
 // Start server
